@@ -5,7 +5,7 @@ Version: 0.1.0
 Date: 2025-04-25
 Authors@R: 
     person("Lalit", "BC", role = c("aut", "cre"),
-           email = "lalitiaas@gmail.com")
+           email = ("lalitiaas@gmail.com")
 Description: Tools for deep learning-based object detection on geospatial raster data.
     Implements a Faster R-CNN model with a ResNet-50 and feature pyramid network
     backbone using the 'torch' package. Provides utilities for reading raster data,
