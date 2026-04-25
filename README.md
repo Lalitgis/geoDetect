@@ -1,6 +1,6 @@
 # geodetect
 
-**Geospatial Object Detection in R using Deep Learning — no Python required.**
+**Geospatial Object Detection in R using Deep Learning**
 
 `geodetect` provides a complete workflow for training and deploying Faster R-CNN object detectors on satellite imagery, aerial photographs, and drone data. Every detected object is returned as a georeferenced bounding box (`sf` polygon) in the raster's CRS.
 
@@ -26,7 +26,7 @@
 install.packages(c("torch", "torchvision", "terra", "sf", "luz", "cli", "fs"))
 
 # Install geodetect
-remotes::install_github("yourusername/geodetect")
+remotes::install_github("Lalitgis/geodetect")
 ```
 
 ---
