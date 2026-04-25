@@ -4,6 +4,12 @@
 
 `geodetect` provides a complete workflow for training and deploying Faster R-CNN object detectors on satellite imagery, aerial photographs, and drone data. Every detected object is returned as a georeferenced bounding box (`sf` polygon) in the raster's CRS.
 
+<p align="center">
+  <img src="icon.png" width="180"/>
+</p>
+
+<h1 align="center">geoDetect</h1>
+<p align="center">Package for the object detection in R</p>
 ---
 
 ## Why geodetect?
