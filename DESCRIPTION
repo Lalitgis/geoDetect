@@ -1,0 +1,44 @@
+Package: geodetect
+Type: Package
+Title: Geospatial Object Detection Using Deep Learning
+Version: 0.1.0
+Date: 2025-04-25
+Authors@R: 
+    person("geodetect", "Authors", role = c("aut", "cre"),
+           email = "geodetect@example.com")
+Description: Provides a complete workflow for deep learning-based object detection
+    on geospatial raster data (satellite imagery, aerial photographs, drone imagery).
+    Implements a Faster R-CNN architecture with a ResNet-50 + FPN backbone via the
+    'torch' package — no Python installation required. Handles the full pipeline:
+    reading geospatially-referenced rasters with 'terra', generating image chips
+    with overlap, assembling annotated datasets from bounding-box labels stored as
+    'sf' vector objects, training detection models, running sliding-window inference
+    on large rasters, back-projecting detected bounding boxes to geographic
+    coordinates, and exporting results as 'sf' objects for downstream GIS analysis.
+    Designed for ecologists, urban planners, agricultural scientists, and disaster
+    response analysts who work in R and need to detect discrete objects (buildings,
+    vehicles, trees, flooded areas) in imagery without switching to Python.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends:
+    R (>= 4.1.0)
+Imports:
+    torch (>= 0.12.0),
+    torchvision (>= 0.5.0),
+    terra (>= 1.7.0),
+    sf (>= 1.0.0),
+    luz (>= 0.4.0),
+    rlang (>= 1.0.0),
+    cli (>= 3.0.0),
+    fs (>= 1.5.0)
+Suggests:
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    ggplot2,
+    tmap
+RoxygenNote: 7.3.1
+VignetteBuilder: knitr
+URL: https://github.com/yourusername/geodetect
+BugReports: https://github.com/yourusername/geodetect/issues

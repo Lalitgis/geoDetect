@@ -1,0 +1,278 @@
+---
+title: "End-to-end geospatial object detection with geodetect"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{End-to-end geospatial object detection with geodetect}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>",
+  eval     = FALSE   # set TRUE when running with real data
+)
+```
+
+## Why geodetect?
+
+Most R geospatial packages stop at image classification or pixel-level
+segmentation (like `geodl`). `geodetect` fills the next gap: **object
+detection** — finding and counting discrete objects in satellite imagery
+with geographic bounding boxes. No Python, no conda environments — just
+pure R.
+
+Typical use cases:
+
+- Counting buildings in post-disaster aerial photography
+- Detecting vehicles in parking lots from drone imagery  
+- Mapping agricultural field boundaries from Sentinel-2 imagery
+- Monitoring deforestation by detecting forest gaps
+
+---
+
+## 0. Install
+
+```{r install}
+# Install from GitHub
+# install.packages("remotes")
+# remotes::install_github("yourusername/geodetect")
+
+library(geodetect)
+library(terra)
+library(sf)
+
+# Check GPU availability (strongly recommended for training)
+has_gpu()
+```
+
+---
+
+## 1. Prepare your data
+
+You need:
+
+1. A multi-band geospatial raster (GeoTIFF, Sentinel-2 scene, aerial ortho, etc.)
+2. A vector layer (GeoPackage, shapefile) of **bounding box annotations**
+   around objects of interest, with a `class` column.
+
+```{r data}
+# Load your raster scene (e.g. RGB aerial image or Sentinel-2 composite)
+scene <- terra::rast("my_scene.tif")
+print(scene)  # Check: bands, CRS, extent
+
+# Load annotations (polygons drawn around objects in QGIS, ArcGIS, etc.)
+labels <- sf::st_read("annotations.gpkg")
+print(table(labels$class))  # Check class distribution
+
+# Define your class map (class name → integer ID, 1-indexed)
+class_map <- c(building = 1L, vehicle = 2L, tree = 3L)
+```
+
+---
+
+## 2. Chip the raster
+
+Break the large scene into 512×512 pixel chips with 25% overlap.
+
+```{r chip}
+chips_df <- make_chips(
+  rast          = scene,
+  chip_size     = 512,
+  overlap       = 0.25,
+  out_dir       = "chips/",
+  min_valid     = 0.5   # Skip chips with > 50% NoData
+)
+
+chips_summary(chips_df)
+head(chips_df)
+```
+
+---
+
+## 3. Assign labels to chips
+
+Map bounding box annotations to per-chip pixel coordinates.
+
+```{r labels}
+labels_list <- assign_labels_to_chips(
+  chips_df      = chips_df,
+  labels_sf     = labels,
+  chip_size     = 512,
+  iou_threshold = 0.3,   # Annotation must overlap chip by at least 30% IoU
+  class_map     = class_map
+)
+
+# How many chips have at least one annotation?
+n_pos <- sum(sapply(labels_list, nrow) > 0)
+cat(n_pos, "chips with annotations out of", nrow(chips_df), "\n")
+```
+
+---
+
+## 4. Split into train / validation
+
+```{r split}
+splits <- split_chips(chips_df, labels_list, val_frac = 0.2, seed = 42)
+
+train_chips  <- splits$train$chips_df
+train_labels <- splits$train$labels_list
+val_chips    <- splits$val$chips_df
+val_labels   <- splits$val$labels_list
+
+cat("Train chips:", nrow(train_chips), "\n")
+cat("Val chips:  ", nrow(val_chips),   "\n")
+```
+
+---
+
+## 5. Create torch Datasets
+
+```{r datasets}
+train_ds <- geo_detection_dataset(
+  chips_df    = train_chips,
+  labels_list = train_labels,
+  chip_size   = 512,
+  n_bands     = 3,
+  augment     = TRUE,    # Random flips + brightness jitter for training
+  normalize   = TRUE     # ImageNet normalization (matches pretrained backbone)
+)
+
+val_ds <- geo_detection_dataset(
+  chips_df    = val_chips,
+  labels_list = val_labels,
+  chip_size   = 512,
+  n_bands     = 3,
+  augment     = FALSE,
+  normalize   = TRUE
+)
+
+cat("Training samples:", length(train_ds), "\n")
+cat("Validation samples:", length(val_ds), "\n")
+```
+
+---
+
+## 6. Build and train the detector
+
+```{r train}
+# Build Faster R-CNN with ImageNet pretrained ResNet-50 backbone
+model <- build_detector(
+  num_classes         = length(class_map),  # 3 classes (+ background internally)
+  pretrained_backbone = TRUE,
+  freeze_backbone     = FALSE,
+  anchor_sizes        = list(c(16L), c(32L), c(64L), c(128L), c(256L)),
+  # Smaller anchors for aerial imagery where objects are small
+  min_size            = 512L,
+  max_size            = 1024L
+)
+
+# Train — automatically saves the best checkpoint
+result <- train_detector(
+  model       = model,
+  train_ds    = train_ds,
+  val_ds      = val_ds,
+  epochs      = 30,
+  batch_size  = 4,     # Reduce to 2 if GPU OOM
+  lr          = 0.005,
+  patience    = 5,
+  class_map   = class_map,
+  chip_size   = 512,
+  n_bands     = 3,
+  save_path   = "geodetect_buildings.pt"
+)
+
+# Plot training curve
+plot(result$history$train_loss, type = "l", col = "steelblue",
+     xlab = "Epoch", ylab = "Loss", main = "Training curve")
+lines(result$history$val_loss, col = "coral")
+legend("topright", legend = c("Train", "Val"),
+       col = c("steelblue", "coral"), lty = 1)
+```
+
+---
+
+## 7. Evaluate (mAP)
+
+```{r evaluate}
+metrics <- evaluate_detector(
+  model        = result$model,
+  dataset      = val_ds,
+  score_thresh = 0.5,
+  device       = "cpu"
+)
+
+cat("mAP@50:      ", round(metrics$map50,    3), "\n")
+cat("mAP@50:95:   ", round(metrics$map50_95, 3), "\n")
+```
+
+---
+
+## 8. Run inference on a new scene
+
+```{r predict}
+# Load a new scene (can be a different extent or image)
+new_scene <- terra::rast("new_area.tif")
+
+# Load saved checkpoint
+ckpt <- load_detector("geodetect_buildings.pt", device = "cpu")
+
+# Sliding-window detection
+detections <- predict_raster(
+  model        = ckpt$model,
+  rast         = new_scene,
+  chip_size    = ckpt$chip_size,
+  n_bands      = ckpt$n_bands,
+  class_map    = ckpt$class_map,
+  overlap      = 0.25,
+  score_thresh = 0.5,
+  nms_thresh   = 0.5
+)
+
+print(detections)
+# sf object: class_id, class_name, score, geometry (POLYGON in scene CRS)
+```
+
+---
+
+## 9. Visualise and export
+
+```{r visualise}
+# Plot detections overlaid on the scene
+plot_detections(
+  rast       = new_scene,
+  detections = detections,
+  title      = "Detected objects"
+)
+
+# Export to GeoPackage for use in QGIS or ArcGIS
+export_detections(detections, "detections.gpkg", overwrite = TRUE)
+
+# Summary statistics
+table(detections$class_name)
+```
+
+---
+
+## Tips for good results
+
+**Small training data (< 500 annotated objects):**
+Set `freeze_backbone = TRUE` in `build_detector()` — only the detection
+head trains, preventing overfitting on small datasets.
+
+**Very small objects (< 20px):**
+Reduce anchor sizes: `anchor_sizes = list(c(4L), c(8L), c(16L), c(32L), c(64L))`.
+
+**Class imbalance:**
+If one class has far fewer examples, use a higher `iou_threshold` (e.g. 0.5)
+in `assign_labels_to_chips()` to be more strict about which chips count.
+
+**Large images without GPU:**
+Use `batch_size = 1` in `predict_raster()` and smaller `chip_size = 256`.
+
+**CRS mismatch:**
+Ensure your raster and annotation vector layer share the same CRS:
+```r
+labels <- sf::st_transform(labels, terra::crs(scene))
+```
