@@ -4,7 +4,7 @@ Title: Geospatial Object Detection Using Deep Learning
 Version: 0.1.0
 Date: 2025-04-25
 Authors@R: 
-    person("geodetect", "Authors", role = c("aut", "cre"),
+    person("Lalit", "BC", role = c("aut", "cre"),
            email = "lalitiaas@gmail.com")
 Description: Provides a complete workflow for deep learning-based object detection
     on geospatial raster data (satellite imagery, aerial photographs, drone imagery).
@@ -40,5 +40,5 @@ Suggests:
     tmap
 RoxygenNote: 7.3.1
 VignetteBuilder: knitr
-URL: https://github.com/yourusername/geodetect
-BugReports: https://github.com/yourusername/geodetect/issues
+URL: https://github.com/Lalitgis/geodetect
+BugReports: https://github.com/Lalitgis/geodetect/issues
