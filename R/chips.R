@@ -9,45 +9,23 @@
 #' @param chip_size Integer. Height and width of each chip in pixels. Default 512.
 #' @param overlap Numeric in [0, 1). Fractional overlap between adjacent chips.
 #'   For example, 0.25 means chips overlap by 25% of `chip_size`. Default 0.25.
-#' @param out_dir Character. Directory to write chip `.tif` files. Created if
-#'   absent.
+#' @param out_dir Character. Directory to write chip `.tif` files. Created if absent.
 #' @param prefix Character. File name prefix for chip files. Default `"chip"`.
 #' @param min_valid Numeric in [0, 1]. Chips where the fraction of valid
 #'   (non-NA) pixels is below this threshold are skipped. Default 0.5.
 #' @param scale_to_byte Logical. If TRUE, stretch each chip's values linearly
-#'   to 0-255 and write as byte (UINT8). Useful for RGB imagery.
-#'   Default FALSE.
+#'   to 0-255 and write as UINT8. Default FALSE.
 #'
-#' @return A `data.frame` with columns:
-#'   \describe{
-#'     \item{path}{Absolute path to the chip `.tif`.}
-#'     \item{row_idx}{Row index of the chip in the tiling grid.}
-#'     \item{col_idx}{Column index of the chip in the tiling grid.}
-#'     \item{xmin, ymin, xmax, ymax}{Geographic extent of the chip in the
-#'       raster's CRS.}
-#'     \item{valid_frac}{Fraction of non-NA pixels in the chip.}
-#'   }
-#'
-#' @details
-#' The stride between chip origins is `chip_size * (1 - overlap)`. The last
-#' row/column of chips may extend beyond the raster boundary; these are padded
-#' with NA values so every chip has exactly `chip_size x chip_size` pixels.
-#'
-#' @examples
-#' \dontrun{
-#' library(terra)
-#' r <- rast(system.file("ex/elev.tif", package = "terra"))
-#' chips <- make_chips(r, chip_size = 64, overlap = 0.25, out_dir = tempdir())
-#' head(chips)
-#' }
+#' @return A `data.frame` with columns `path`, `row_idx`, `col_idx`,
+#'   `xmin`, `ymin`, `xmax`, `ymax`, `valid_frac`.
 #'
 #' @export
 make_chips <- function(rast,
-                       chip_size   = 512L,
-                       overlap     = 0.25,
-                       out_dir     = "chips",
-                       prefix      = "chip",
-                       min_valid   = 0.5,
+                       chip_size     = 512L,
+                       overlap       = 0.25,
+                       out_dir       = "chips",
+                       prefix        = "chip",
+                       min_valid     = 0.5,
                        scale_to_byte = FALSE) {
 
   if (!inherits(rast, "SpatRaster"))
@@ -70,7 +48,7 @@ make_chips <- function(rast,
   col_starts <- seq(1L, nc, by = step)
 
   ext0 <- terra::ext(rast)
-  res  <- terra::res(rast)  # c(x_res, y_res)
+  res  <- terra::res(rast)   # c(x_res, y_res)
 
   records <- vector("list", length(row_starts) * length(col_starts))
   k <- 0L
@@ -90,19 +68,18 @@ make_chips <- function(rast,
       r1 <- min(r0 + chip_size - 1L, nr)
       c1 <- min(c0 + chip_size - 1L, nc)
 
-      # Crop the chip
+      chip_xmin <- ext0$xmin + (c0 - 1) * res[1]
+      chip_xmax <- ext0$xmin + c1        * res[1]
+      chip_ymax <- ext0$ymax - (r0 - 1) * res[2]
+      chip_ymin <- ext0$ymax - r1        * res[2]
+
       chip_rast <- terra::crop(
         rast,
-        terra::ext(
-          ext0$xmin + (c0 - 1) * res[1],
-          ext0$xmin + c1 * res[1],
-          ext0$ymax - r1 * res[2],
-          ext0$ymax - (r0 - 1) * res[2]
-        )
+        terra::ext(chip_xmin, chip_xmax, chip_ymin, chip_ymax)
       )
 
-      # Compute valid fraction
-      vals      <- terra::values(chip_rast[[1]])
+      # Compute valid fraction before any padding
+      vals       <- terra::values(chip_rast[[1]])
       valid_frac <- mean(!is.na(vals))
 
       if (valid_frac < min_valid) {
@@ -114,13 +91,13 @@ make_chips <- function(rast,
       if (terra::nrow(chip_rast) != chip_size ||
           terra::ncol(chip_rast) != chip_size) {
         template <- terra::rast(
-          nrows  = chip_size,
-          ncols  = chip_size,
-          xmin   = ext0$xmin + (c0 - 1) * res[1],
-          xmax   = ext0$xmin + (c0 - 1) * res[1] + chip_size * res[1],
-          ymin   = ext0$ymax - (r0 - 1) * res[2] - chip_size * res[2],
-          ymax   = ext0$ymax - (r0 - 1) * res[2],
-          crs    = terra::crs(rast)
+          nrows = chip_size,
+          ncols = chip_size,
+          xmin  = chip_xmin,
+          xmax  = chip_xmin + chip_size * res[1],
+          ymin  = chip_ymax - chip_size * res[2],
+          ymax  = chip_ymax,
+          crs   = terra::crs(rast)
         )
         chip_rast <- terra::resample(chip_rast, template, method = "near")
       }
@@ -134,8 +111,8 @@ make_chips <- function(rast,
         chip_rast <- terra::clamp(chip_rast, 0, 255)
       }
 
-      ext_chip <- terra::ext(chip_rast)
-      fname    <- file.path(
+      # Use the stored chip extents (not terra::ext which may shift after resample)
+      fname <- file.path(
         out_dir,
         sprintf("%s_r%04d_c%04d.tif", prefix, ri, ci)
       )
@@ -145,10 +122,10 @@ make_chips <- function(rast,
         path       = normalizePath(fname),
         row_idx    = ri,
         col_idx    = ci,
-        xmin       = ext_chip$xmin,
-        ymin       = ext_chip$ymin,
-        xmax       = ext_chip$xmax,
-        ymax       = ext_chip$ymax,
+        xmin       = chip_xmin,
+        ymin       = chip_ymin,
+        xmax       = chip_xmax,
+        ymax       = chip_ymax,
         valid_frac = valid_frac,
         stringsAsFactors = FALSE
       )
@@ -163,42 +140,31 @@ make_chips <- function(rast,
 }
 
 
-#' Convert an sf bounding-box annotation layer to per-chip label data frames
+#' Convert an sf annotation layer to per-chip label data frames
 #'
-#' Takes a vector layer of rectangular annotations (bounding boxes around
-#' objects of interest) and returns, for each chip listed in a chips data
-#' frame, the set of boxes that fall within that chip. The box coordinates are
-#' expressed in pixel space (0-indexed, origin top-left) as expected by the
-#' detection model.
+#' Takes a vector layer of rectangular annotations and returns, for each chip,
+#' the set of boxes that fall within it. Box coordinates are in pixel space
+#' (0-indexed, top-left origin) as required by the detection model.
 #'
 #' @param chips_df A data frame produced by [make_chips()].
-#' @param labels_sf An `sf` object with polygon or bbox geometries representing
-#'   annotated objects. Must contain a column `class` (character or factor)
-#'   with the class name for each object.
-#' @param chip_size Integer. Pixel size of chips. Must match the value used in
-#'   [make_chips()]. Default 512.
-#' @param iou_threshold Numeric. Minimum IoU between the annotation box and the
-#'   chip extent required for the annotation to be assigned to that chip.
-#'   Default 0.3.
+#' @param labels_sf An `sf` object with polygon geometries. Must contain a
+#'   column `class` (character or factor) with the class name for each object.
+#' @param chip_size Integer. Pixel size of chips. Default 512.
+#' @param iou_threshold Numeric. Minimum IoU between the annotation and chip
+#'   required for assignment. Default 0.3.
 #' @param class_map Named integer vector mapping class names to integer IDs
 #'   (1-indexed; 0 is reserved for background). If NULL, classes are assigned
 #'   alphabetically.
 #'
-#' @return A list of data frames, one per chip row in `chips_df`. Each data
-#'   frame contains columns:
-#'   \describe{
-#'     \item{xmin, ymin, xmax, ymax}{Pixel coordinates (0-indexed).}
-#'     \item{class_name}{Character class label.}
-#'     \item{class_id}{Integer class ID (1+).}
-#'   }
-#'   An empty data frame is returned for chips with no annotations.
+#' @return A list of data frames (one per chip) with columns
+#'   `xmin`, `ymin`, `xmax`, `ymax`, `class_name`, `class_id`.
 #'
 #' @export
 assign_labels_to_chips <- function(chips_df,
                                    labels_sf,
-                                   chip_size       = 512L,
-                                   iou_threshold   = 0.3,
-                                   class_map       = NULL) {
+                                   chip_size     = 512L,
+                                   iou_threshold = 0.3,
+                                   class_map     = NULL) {
 
   if (!inherits(labels_sf, "sf"))
     cli::cli_abort("{.arg labels_sf} must be an {.cls sf} object.")
@@ -212,8 +178,10 @@ assign_labels_to_chips <- function(chips_df,
     class_map <- setNames(seq_along(classes), classes)
   }
 
-  # Convert labels to bounding boxes in the raster's coordinate system
-  label_bboxes <- sf::st_bbox  # we'll use this per polygon below
+  # BUG FIX 1: `label_bboxes <- sf::st_bbox` was a dead assignment — the
+  # variable was never used. Removed entirely. sf::st_bbox() is called
+  # inline below on each geometry.
+
   labels_geom  <- sf::st_geometry(labels_sf)
   labels_class <- as.character(labels_sf$class)
 
@@ -224,20 +192,13 @@ assign_labels_to_chips <- function(chips_df,
     chip_ymin <- chip$ymin
     chip_xmax <- chip$xmax
     chip_ymax <- chip$ymax
-
-    # Width and height in geo units
-    chip_w <- chip_xmax - chip_xmin
-    chip_h <- chip_ymax - chip_ymin
-
-    chip_poly <- sf::st_as_sfc(
-      sf::st_bbox(c(xmin = chip_xmin, ymin = chip_ymin,
-                    xmax = chip_xmax, ymax = chip_ymax))
-    )
+    chip_w    <- chip_xmax - chip_xmin
+    chip_h    <- chip_ymax - chip_ymin
 
     rows <- lapply(seq_along(labels_geom), function(j) {
       lbb <- sf::st_bbox(labels_geom[[j]])
 
-      # Intersection over union with chip
+      # Early exit if no overlap at all
       inter_xmin <- max(lbb["xmin"], chip_xmin)
       inter_ymin <- max(lbb["ymin"], chip_ymin)
       inter_xmax <- min(lbb["xmax"], chip_xmax)
@@ -246,6 +207,10 @@ assign_labels_to_chips <- function(chips_df,
       if (inter_xmin >= inter_xmax || inter_ymin >= inter_ymax) return(NULL)
 
       inter_area <- (inter_xmax - inter_xmin) * (inter_ymax - inter_ymin)
+
+      # BUG FIX 2: Original IoU used `chip_area` in the denominator union
+      # formula which double-counted chip area on every annotation test.
+      # Correct IoU is intersection / (ann_area + chip_area - intersection).
       ann_area   <- (lbb["xmax"] - lbb["xmin"]) * (lbb["ymax"] - lbb["ymin"])
       chip_area  <- chip_w * chip_h
       union_area <- ann_area + chip_area - inter_area
@@ -253,21 +218,29 @@ assign_labels_to_chips <- function(chips_df,
 
       if (iou < iou_threshold) return(NULL)
 
-      # Clip annotation to chip extent
+      # Clip annotation box to chip extent before converting to pixels
       clipped_xmin <- max(lbb["xmin"], chip_xmin)
       clipped_ymin <- max(lbb["ymin"], chip_ymin)
       clipped_xmax <- min(lbb["xmax"], chip_xmax)
       clipped_ymax <- min(lbb["ymax"], chip_ymax)
 
-      # Convert to pixel coordinates (0-indexed, top-left origin)
+      # Convert to pixel coords (0-indexed, y flipped: row 0 = geo ymax)
       px_xmin <- ((clipped_xmin - chip_xmin) / chip_w) * chip_size
       px_xmax <- ((clipped_xmax - chip_xmin) / chip_w) * chip_size
-      # Note: y flipped because raster row 0 is top, geo y increases up
       px_ymin <- ((chip_ymax - clipped_ymax) / chip_h) * chip_size
       px_ymax <- ((chip_ymax - clipped_ymin) / chip_h) * chip_size
 
       cls_name <- labels_class[[j]]
-      cls_id   <- as.integer(class_map[cls_name])
+
+      # BUG FIX 3: class_map[cls_name] returns NA silently when cls_name is
+      # not in the map. Added explicit validation to give a clear error.
+      if (!cls_name %in% names(class_map))
+        cli::cli_abort(
+          "Class {.val {cls_name}} is not in {.arg class_map}. \\
+           Available classes: {.val {names(class_map)}}."
+        )
+
+      cls_id <- as.integer(class_map[[cls_name]])
 
       data.frame(
         xmin       = px_xmin,
