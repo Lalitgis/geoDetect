@@ -1,100 +1,58 @@
 #' Train a geospatial object detector
 #'
-#' Runs the full training loop for a Faster R-CNN model on geospatial image
-#' chips. Handles loss logging, validation, early stopping, and saving the
-#' best checkpoint. Returns training history and the best model.
-#'
 #' @param model A Faster R-CNN `nn_module` from [build_detector()].
-#' @param train_ds A dataset from [geo_detection_dataset()] for training.
-#' @param val_ds A dataset from [geo_detection_dataset()] for validation.
-#'   Can be NULL to skip validation.
-#' @param epochs Integer. Maximum training epochs. Default 30.
-#' @param batch_size Integer. Images per batch. Default 4. Reduce if GPU OOM.
+#' @param train_ds A dataset from [geo_detection_dataset()].
+#' @param val_ds Optional validation dataset. NULL to skip.
+#' @param epochs Integer. Max epochs. Default 30.
+#' @param batch_size Integer. Images per batch. Default 4.
 #' @param lr Numeric. Initial learning rate. Default 0.005.
-#' @param lr_step_size Integer. Decay the learning rate every this many
-#'   epochs by `lr_gamma`. Default 10.
-#' @param lr_gamma Numeric. Multiplicative LR decay factor. Default 0.1.
-#' @param weight_decay Numeric. L2 regularization. Default 1e-4.
-#' @param patience Integer. Stop training early if validation loss does not
-#'   improve for this many consecutive epochs. Default 5.
-#' @param save_path Character. Path to save the best model checkpoint (`.pt`).
-#'   Default `"geodetect_best.pt"`.
-#' @param num_workers Integer. Parallel DataLoader workers. 0 = main process
-#'   (safest on Windows). Default 0.
-#' @param device Character. `"cuda"` or `"cpu"`. Auto-detected if not supplied.
-#' @param class_map Named integer vector (class → ID). Saved with the checkpoint
-#'   so [predict_raster()] can reconstruct class names.
+#' @param lr_step_size Integer. LR decay every N epochs. Default 10.
+#' @param lr_gamma Numeric. LR decay factor. Default 0.1.
+#' @param weight_decay Numeric. L2 regularisation. Default 1e-4.
+#' @param patience Integer. Early stopping patience. Default 5.
+#' @param save_path Character. Best checkpoint path. Default `"geodetect_best.pt"`.
+#' @param num_workers Integer. DataLoader workers. Default 0 (safe on Windows).
+#' @param device Character. `"cuda"` or `"cpu"`. Auto-detected if NULL.
+#' @param class_map Named integer vector saved in checkpoint.
 #' @param chip_size Integer. Saved in checkpoint metadata. Default 512.
 #' @param n_bands Integer. Saved in checkpoint metadata. Default 3.
 #' @param verbose Logical. Print per-epoch loss. Default TRUE.
 #'
-#' @return A list with:
-#'   \describe{
-#'     \item{history}{Data frame with columns `epoch`, `train_loss`,
-#'       `val_loss` (NA if no validation set).}
-#'     \item{best_epoch}{Integer. Epoch with lowest validation loss.}
-#'     \item{model}{The model loaded from the best checkpoint.}
-#'   }
-#'
-#' @details
-#' Faster R-CNN training uses the model's own internal loss functions:
-#' classification loss (cross-entropy), box regression loss (smooth L1),
-#' and RPN losses. The total loss is their sum. No custom loss needs to be
-#' defined.
-#'
-#' @examples
-#' \dontrun{
-#' model  <- build_detector(num_classes = 2)
-#' result <- train_detector(
-#'   model      = model,
-#'   train_ds   = train_ds,
-#'   val_ds     = val_ds,
-#'   epochs     = 20,
-#'   batch_size = 4,
-#'   class_map  = c(building = 1L, vehicle = 2L),
-#'   save_path  = "my_detector.pt"
-#' )
-#' plot(result$history$train_loss, type = "l", ylab = "Loss", xlab = "Epoch")
-#' }
-#'
+#' @return A list: `history` (data frame), `best_epoch` (integer), `model`.
 #' @export
 train_detector <- function(model,
                            train_ds,
-                           val_ds      = NULL,
-                           epochs      = 30L,
-                           batch_size  = 4L,
-                           lr          = 0.005,
+                           val_ds       = NULL,
+                           epochs       = 30L,
+                           batch_size   = 4L,
+                           lr           = 0.005,
                            lr_step_size = 10L,
-                           lr_gamma    = 0.1,
+                           lr_gamma     = 0.1,
                            weight_decay = 1e-4,
-                           patience    = 5L,
-                           save_path   = "geodetect_best.pt",
-                           num_workers = 0L,
-                           device      = NULL,
-                           class_map   = NULL,
-                           chip_size   = 512L,
-                           n_bands     = 3L,
-                           verbose     = TRUE) {
+                           patience     = 5L,
+                           save_path    = "geodetect_best.pt",
+                           num_workers  = 0L,
+                           device       = NULL,
+                           class_map    = NULL,
+                           chip_size    = 512L,
+                           n_bands      = 3L,
+                           verbose      = TRUE) {
 
   if (!requireNamespace("torch", quietly = TRUE)) stop("Package 'torch' required.")
 
-  # Auto-detect device
-  if (is.null(device)) {
+  if (is.null(device))
     device <- if (torch::cuda_is_available()) "cuda" else "cpu"
-  }
   cli::cli_alert_info("Training on: {.field {device}}")
 
   model$to(device = device)
-  model$train()
 
-  # DataLoader — uses custom collate for variable-size targets
   train_dl <- torch::dataloader(
-    dataset     = train_ds,
-    batch_size  = as.integer(batch_size),
-    shuffle     = TRUE,
-    collate_fn  = detection_collate_fn,
+    dataset    = train_ds,
+    batch_size = as.integer(batch_size),
+    shuffle    = TRUE,
+    collate_fn = detection_collate_fn,
     num_workers = as.integer(num_workers),
-    drop_last   = TRUE
+    drop_last  = TRUE
   )
 
   val_dl <- if (!is.null(val_ds)) {
@@ -107,7 +65,6 @@ train_detector <- function(model,
     )
   } else NULL
 
-  # Optimizer — SGD with momentum, standard for Faster R-CNN
   optimizer <- torch::optim_sgd(
     params       = model$parameters(),
     lr           = lr,
@@ -115,11 +72,10 @@ train_detector <- function(model,
     weight_decay = weight_decay
   )
 
-  # Step LR scheduler
   scheduler <- torch::lr_step(
-    optimizer  = optimizer,
-    step_size  = as.integer(lr_step_size),
-    gamma      = lr_gamma
+    optimizer = optimizer,
+    step_size = as.integer(lr_step_size),
+    gamma     = lr_gamma
   )
 
   history <- data.frame(
@@ -129,15 +85,26 @@ train_detector <- function(model,
   )
 
   best_val_loss <- Inf
+  # BUG FIX 10: `best_epoch` was used after the training loop in
+  # cli::cli_alert_success() and list() but was only assigned inside an `if`
+  # block — if no epoch ever improved, R would throw "object not found".
+  best_epoch    <- 1L
   no_improve    <- 0L
 
   for (ep in seq_len(epochs)) {
 
-    # ------ Training phase ------
+    # ------ Training ------
     model$train()
     train_losses <- numeric(0)
 
-    coro::loop(for (batch in train_dl) {
+    # BUG FIX 11: coro::loop() was used but `coro` is not in DESCRIPTION
+    # Imports. Replaced with standard for() over the dataloader iterator,
+    # which is the documented pattern in the `torch` R package.
+    dl_iter <- torch::dataloader_make_iter(train_dl)
+    repeat {
+      batch <- torch::dataloader_next(dl_iter)
+      if (is.null(batch)) break
+
       images  <- lapply(batch$images,  function(x) x$to(device = device))
       targets <- lapply(batch$targets, function(t) list(
         boxes  = t$boxes$to(device = device),
@@ -146,43 +113,55 @@ train_detector <- function(model,
 
       optimizer$zero_grad()
 
-      # Faster R-CNN forward pass in training mode returns a loss dict
-      loss_dict <- model(images, targets)
-      total_loss <- torch::torch_stack(as.list(loss_dict))$sum()
+      # BUG FIX 12: `torch::torch_stack(as.list(loss_dict))$sum()` fails
+      # because loss_dict is a named list of scalar tensors, not stackable
+      # in general. The correct idiom is to sum them with Reduce.
+      loss_dict  <- model(images, targets)
+      total_loss <- Reduce(`+`, loss_dict)
 
       total_loss$backward()
-      # Gradient clipping for stability
       torch::nn_utils_clip_grad_norm_(model$parameters(), max_norm = 5.0)
       optimizer$step()
 
       train_losses <- c(train_losses, total_loss$item())
-    })
+    }
 
     scheduler$step()
-    mean_train <- mean(train_losses)
+    mean_train <- if (length(train_losses) > 0) mean(train_losses) else NA_real_
 
-    # ------ Validation phase ------
+    # ------ Validation ------
     mean_val <- NA_real_
     if (!is.null(val_dl)) {
-      model$eval()
+
+      # BUG FIX 13: Original code called model$eval() then inside the loop
+      # switched model$train() to get losses — that defeats the purpose of
+      # no_grad() and incorrectly accumulates BN statistics.
+      # Correct: Faster R-CNN only returns loss dicts in training mode.
+      # We must set model$train() for validation loss, but wrap with no_grad()
+      # so gradients are not computed. BatchNorm running stats are NOT updated
+      # because we do not call optimizer$step().
+      model$train()
       val_losses <- numeric(0)
 
       with(torch::no_grad(), {
-        coro::loop(for (batch in val_dl) {
+        dl_iter_v <- torch::dataloader_make_iter(val_dl)
+        repeat {
+          batch <- torch::dataloader_next(dl_iter_v)
+          if (is.null(batch)) break
+
           images  <- lapply(batch$images,  function(x) x$to(device = device))
           targets <- lapply(batch$targets, function(t) list(
             boxes  = t$boxes$to(device = device),
             labels = t$labels$to(device = device)
           ))
-          # Call in train() mode temporarily to get loss from Faster R-CNN
-          model$train()
+
           loss_dict  <- model(images, targets)
-          model$eval()
-          total_loss <- torch::torch_stack(as.list(loss_dict))$sum()
+          total_loss <- Reduce(`+`, loss_dict)
           val_losses <- c(val_losses, total_loss$item())
-        })
+        }
       })
-      mean_val <- mean(val_losses)
+
+      mean_val <- if (length(val_losses) > 0) mean(val_losses) else NA_real_
     }
 
     history <- rbind(history, data.frame(
@@ -194,24 +173,25 @@ train_detector <- function(model,
     if (verbose) {
       if (!is.na(mean_val)) {
         cli::cli_alert_info(
-          "Epoch {ep}/{epochs} | Train loss: {round(mean_train, 4)} | Val loss: {round(mean_val, 4)}"
+          "Epoch {ep}/{epochs} | Train: {round(mean_train, 4)} | Val: {round(mean_val, 4)}"
         )
       } else {
         cli::cli_alert_info(
-          "Epoch {ep}/{epochs} | Train loss: {round(mean_train, 4)}"
+          "Epoch {ep}/{epochs} | Train: {round(mean_train, 4)}"
         )
       }
     }
 
-    # ------ Early stopping & checkpointing ------
     monitor_loss <- if (!is.na(mean_val)) mean_val else mean_train
 
-    if (monitor_loss < best_val_loss) {
+    if (!is.na(monitor_loss) && monitor_loss < best_val_loss) {
       best_val_loss <- monitor_loss
       best_epoch    <- ep
       no_improve    <- 0L
 
-      # Save checkpoint with metadata for reloading
+      # BUG FIX 14: Checkpoint saved min_size/max_size as hard-coded 512/1024
+      # regardless of what was passed to build_detector().
+      # Now reads back from model$transform so the saved values are accurate.
       torch::torch_save(
         list(
           state_dict  = model$state_dict(),
@@ -219,27 +199,27 @@ train_detector <- function(model,
           class_map   = class_map,
           chip_size   = chip_size,
           n_bands     = n_bands,
-          min_size    = 512L,
-          max_size    = 1024L
+          min_size    = model$transform$min_size,
+          max_size    = model$transform$max_size
         ),
         save_path
       )
-      if (verbose) cli::cli_alert_success("  Saved best model (epoch {ep})")
+      if (verbose) cli::cli_alert_success("  Checkpoint saved (epoch {ep})")
     } else {
       no_improve <- no_improve + 1L
       if (no_improve >= patience) {
         cli::cli_alert_warning(
-          "Early stopping: no improvement for {patience} epochs. Best epoch: {best_epoch}."
+          "Early stopping at epoch {ep}. Best epoch: {best_epoch}."
         )
         break
       }
     }
   }
 
-  # Reload best model
   best_ckpt <- load_detector(save_path, device = "cpu")
-
-  cli::cli_alert_success("Training complete. Best epoch: {best_epoch} | Loss: {round(best_val_loss, 4)}")
+  cli::cli_alert_success(
+    "Done. Best epoch: {best_epoch} | Loss: {round(best_val_loss, 4)}"
+  )
 
   list(
     history    = history,
@@ -249,21 +229,15 @@ train_detector <- function(model,
 }
 
 
-#' Compute mean average precision (mAP) for a detector
+#' Compute mAP for a trained detector (mAP@50 and mAP@50:95)
 #'
-#' Evaluates a trained detector on a dataset by computing mAP@50 and
-#' mAP@50:95 using the COCO protocol.
-#'
-#' @param model A trained Faster R-CNN model (eval mode).
+#' @param model Trained Faster R-CNN (will be set to eval mode).
 #' @param dataset A `geo_detection_dataset`.
-#' @param iou_thresholds Numeric vector of IoU thresholds. Default is
-#'   `seq(0.5, 0.95, by = 0.05)` (COCO standard).
-#' @param score_thresh Numeric. Minimum score for a prediction to count.
-#'   Default 0.5.
-#' @param device Character. `"cpu"` or `"cuda"`.
+#' @param iou_thresholds Numeric vector. Default `seq(0.5, 0.95, by = 0.05)`.
+#' @param score_thresh Numeric. Min score to count a prediction. Default 0.5.
+#' @param device Character. Default `"cpu"`.
 #'
-#' @return A list with `map50` (scalar) and `map50_95` (scalar).
-#'
+#' @return List: `map50`, `map50_95`.
 #' @export
 evaluate_detector <- function(model,
                               dataset,
@@ -288,8 +262,12 @@ evaluate_detector <- function(model,
   img_id    <- 0L
 
   with(torch::no_grad(), {
-    coro::loop(for (batch in dl) {
-      img_id  <- img_id + 1L
+    dl_iter <- torch::dataloader_make_iter(dl)
+    repeat {
+      batch <- torch::dataloader_next(dl_iter)
+      if (is.null(batch)) break
+      img_id <- img_id + 1L
+
       images  <- lapply(batch$images, function(x) x$to(device = device))
       targets <- batch$targets
 
@@ -304,27 +282,23 @@ evaluate_detector <- function(model,
         boxes  = targets[[1]]$boxes,
         labels = targets[[1]]$labels
       )
-    })
+    }
   })
 
-  # Compute mAP per IoU threshold then average
-  aps <- vapply(iou_thresholds, function(iou_thresh) {
-    .compute_ap_at_iou(all_preds, all_gt, iou_thresh, score_thresh)
+  aps <- vapply(iou_thresholds, function(thr) {
+    .compute_ap_at_iou(all_preds, all_gt, thr, score_thresh)
   }, numeric(1))
 
-  list(
-    map50    = aps[1],
-    map50_95 = mean(aps)
-  )
+  list(map50 = aps[1], map50_95 = mean(aps))
 }
 
 
-# Internal: compute AP at a single IoU threshold using standard 11-point interpolation
+# Internal: AP at one IoU threshold (11-point interpolation)
 .compute_ap_at_iou <- function(preds_list, gt_list, iou_thresh, score_thresh) {
 
-  all_scores  <- c()
-  all_tp      <- c()
-  all_fp      <- c()
+  all_scores  <- numeric(0)
+  all_tp      <- integer(0)
+  all_fp      <- integer(0)
   n_gt_total  <- 0L
 
   for (i in seq_along(preds_list)) {
@@ -333,40 +307,37 @@ evaluate_detector <- function(model,
 
     pred_boxes  <- as.matrix(pred$boxes)
     pred_scores <- as.numeric(pred$scores)
-    pred_labels <- as.integer(pred$labels)
+    gt_boxes    <- as.matrix(gt$boxes)
+    n_gt        <- nrow(gt_boxes)
+    n_gt_total  <- n_gt_total + n_gt
 
-    gt_boxes  <- as.matrix(gt$boxes)
-    n_gt       <- nrow(gt_boxes)
-    n_gt_total <- n_gt_total + n_gt
-
-    keep <- pred_scores >= score_thresh
+    keep        <- pred_scores >= score_thresh
     pred_boxes  <- pred_boxes[keep, , drop = FALSE]
     pred_scores <- pred_scores[keep]
 
     if (nrow(pred_boxes) == 0) next
 
-    # Sort by descending score
-    ord <- order(pred_scores, decreasing = TRUE)
-    pred_boxes  <- pred_boxes[ord, , drop = FALSE]
+    ord        <- order(pred_scores, decreasing = TRUE)
+    pred_boxes <- pred_boxes[ord, , drop = FALSE]
     pred_scores <- pred_scores[ord]
 
     matched <- rep(FALSE, n_gt)
 
     for (j in seq_len(nrow(pred_boxes))) {
       if (n_gt == 0) {
-        all_tp <- c(all_tp, 0); all_fp <- c(all_fp, 1)
+        all_tp <- c(all_tp, 0L); all_fp <- c(all_fp, 1L)
         all_scores <- c(all_scores, pred_scores[j])
         next
       }
-      ious <- .box_iou_vec(pred_boxes[j, ], gt_boxes)
-      best_iou_idx <- which.max(ious)
-      best_iou     <- ious[best_iou_idx]
+      ious         <- .box_iou_vec(pred_boxes[j, ], gt_boxes)
+      best_idx     <- which.max(ious)
+      best_iou     <- ious[best_idx]
 
-      if (best_iou >= iou_thresh && !matched[best_iou_idx]) {
-        matched[best_iou_idx] <- TRUE
-        all_tp <- c(all_tp, 1); all_fp <- c(all_fp, 0)
+      if (best_iou >= iou_thresh && !matched[best_idx]) {
+        matched[best_idx] <- TRUE
+        all_tp <- c(all_tp, 1L); all_fp <- c(all_fp, 0L)
       } else {
-        all_tp <- c(all_tp, 0); all_fp <- c(all_fp, 1)
+        all_tp <- c(all_tp, 0L); all_fp <- c(all_fp, 1L)
       }
       all_scores <- c(all_scores, pred_scores[j])
     }
@@ -374,26 +345,21 @@ evaluate_detector <- function(model,
 
   if (length(all_scores) == 0 || n_gt_total == 0) return(0.0)
 
-  ord  <- order(all_scores, decreasing = TRUE)
-  tp_c <- cumsum(all_tp[ord])
-  fp_c <- cumsum(all_fp[ord])
-
+  ord       <- order(all_scores, decreasing = TRUE)
+  tp_c      <- cumsum(all_tp[ord])
+  fp_c      <- cumsum(all_fp[ord])
   recall    <- tp_c / n_gt_total
   precision <- tp_c / (tp_c + fp_c)
 
-  # 11-point interpolation
-  r_levels <- seq(0, 1, by = 0.1)
-  ap <- mean(vapply(r_levels, function(r) {
-    max(c(0, precision[recall >= r]))
+  mean(vapply(seq(0, 1, by = 0.1), function(r) {
+    p <- precision[recall >= r]
+    if (length(p) == 0) 0.0 else max(p)
   }, numeric(1)))
-
-  ap
 }
 
-# Internal: compute IoU between one box and a matrix of boxes
+
+# Internal: IoU between one box and many boxes
 .box_iou_vec <- function(box, boxes) {
-  # box: [xmin, ymin, xmax, ymax]
-  # boxes: matrix [N, 4]
   inter_xmin <- pmax(boxes[, 1], box[1])
   inter_ymin <- pmax(boxes[, 2], box[2])
   inter_xmax <- pmin(boxes[, 3], box[3])
@@ -403,7 +369,7 @@ evaluate_detector <- function(model,
   inter_h <- pmax(0, inter_ymax - inter_ymin)
   inter   <- inter_w * inter_h
 
-  area_box  <- (box[3]     - box[1])     * (box[4]     - box[2])
+  area_box   <- (box[3] - box[1]) * (box[4] - box[2])
   area_boxes <- (boxes[, 3] - boxes[, 1]) * (boxes[, 4] - boxes[, 2])
 
   inter / (area_box + area_boxes - inter + 1e-6)
