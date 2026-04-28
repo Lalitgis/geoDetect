@@ -1,39 +1,41 @@
 Package: geodetect
 Type: Package
-Title: Deep Learning for Geospatial Object Detection
-Version: 0.1.0
-Date: 2025-04-25
+Title: Geospatial Object Detection Using Deep Learning
+Version: 0.2.0
+Date: 2025-04-27
 Authors@R: 
-    person("Lalit", "BC", role = c("aut", "cre"),
-           email = ("lalitiaas@gmail.com")
-Description: Tools for deep learning-based object detection on geospatial raster data.
-    Implements a Faster R-CNN model with a ResNet-50 and feature pyramid network
-    backbone using the 'torch' package. Provides utilities for reading raster data,
-    generating image tiles, preparing datasets from bounding-box annotations,
-    training models, running inference on large rasters, and exporting predictions
-    as 'sf' objects for spatial analysis.
+    person("geodetect", "Authors", email = "lalitiaas@gmail.com", role = c("aut", "cre"))
+Description: Provides a complete workflow for deep learning-based object detection
+    on geospatial raster data (satellite imagery, aerial photographs, drone imagery).
+    Implements Faster R-CNN with a ResNet-50 + FPN backbone via the 'torch' package —
+    no Python installation required. Handles the full pipeline: reading
+    geospatially-referenced rasters with 'terra', tiling into overlapping chips,
+    assembling annotated datasets from bounding-box labels stored as 'sf' vector
+    objects, training detection models, running sliding-window inference on large
+    rasters, back-projecting detected bounding boxes to geographic coordinates, and
+    exporting results as 'sf' objects for downstream GIS analysis.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Depends:
     R (>= 4.1.0)
 Imports:
-    torch ,
-    torchvision,
-    terra ,
-    sf ,
-    luz,
-    rlang,
-    cli,
-    fs 
+    torch (>= 0.12.0),
+    torchvision (>= 0.5.0),
+    terra (>= 1.7.0),
+    sf (>= 1.0.0),
+    luz (>= 0.4.0),
+    rlang (>= 1.0.0),
+    cli (>= 3.0.0),
+    fs (>= 1.5.0),
+    grDevices
 Suggests:
     testthat (>= 3.0.0),
     knitr,
     rmarkdown,
     ggplot2,
     tmap
-Config/testthat/edition: 3
 RoxygenNote: 7.3.1
 VignetteBuilder: knitr
-URL: https://github.com/Lalitgis/geodetect
-BugReports: https://github.com/Lalitgis/geodetect/issues
+URL: https://github.com/Lalitgis/geoDetect
+BugReports: https://github.com/Lalitgis/geoDetect/issues
